@@ -2,6 +2,7 @@
 #include "kernel/stat.h"
 #include "user/user.h"
 
+// add a test branch
 int main(int argc, char *argv[])
 {
     int time = 0;
