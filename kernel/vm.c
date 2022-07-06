@@ -5,6 +5,8 @@
 #include "riscv.h"
 #include "defs.h"
 #include "fs.h"
+#include "spinlock.h"
+#include "proc.h"
 
 /*
  * the kernel's page table.
@@ -132,7 +134,7 @@ kvmpa(uint64 va)
   pte_t *pte;
   uint64 pa;
   
-  pte = walk(kernel_pagetable, va, 0);
+  pte = walk(myproc()->kpagetable, va, 0);
   if(pte == 0)
     panic("kvmpa");
   if((*pte & PTE_V) == 0)
@@ -465,4 +467,43 @@ void vmprint(pagetable_t pagetable)
 {
   printf("page table %p\n", pagetable);
   vmprint_(pagetable, 1);
+}
+
+int ukvmmap(pagetable_t pagetable, uint64 va, uint64 pa, uint64 sz, int perm)
+{
+  return mappages(pagetable, va, sz, pa, perm);
+}
+
+pagetable_t proc_kpagetable()
+{
+  pagetable_t kpagetable = uvmcreate();
+  if(kpagetable == 0)
+    return 0;
+  ukvmmap(kpagetable, UART0, UART0, PGSIZE, PTE_R | PTE_W);
+  ukvmmap(kpagetable, VIRTIO0, VIRTIO0, PGSIZE, PTE_R | PTE_W);
+  ukvmmap(kpagetable, CLINT, CLINT, 0x10000, PTE_R | PTE_W);
+  ukvmmap(kpagetable, PLIC, PLIC, 0x400000, PTE_R | PTE_W);
+  ukvmmap(kpagetable, KERNBASE, KERNBASE, (uint64)etext-KERNBASE, PTE_R | PTE_X);
+  ukvmmap(kpagetable, (uint64)etext, (uint64)etext, PHYSTOP-(uint64)etext, PTE_R | PTE_W);
+  ukvmmap(kpagetable, TRAMPOLINE, (uint64)trampoline, PGSIZE, PTE_R | PTE_X);
+  return kpagetable;  
+}
+
+void kvm_reloadhart(pagetable_t pagetable)
+{
+  w_satp(MAKE_SATP(pagetable));
+  sfence_vma();
+}
+
+void proc_freekpagetable(struct proc *p)
+{
+  uvmunmap(p->kpagetable, UART0, 1, 0);
+  uvmunmap(p->kpagetable, VIRTIO0, 1, 0);
+  uvmunmap(p->kpagetable, CLINT, 0x10000 / PGSIZE, 0);
+  uvmunmap(p->kpagetable, PLIC, 0x400000 / PGSIZE, 0);
+  uvmunmap(p->kpagetable, KERNBASE, ((uint64)etext - KERNBASE) / PGSIZE, 0);
+  uvmunmap(p->kpagetable, (uint64)etext, (PHYSTOP - (uint64)etext) / PGSIZE, 0);
+  uvmunmap(p->kpagetable, TRAMPOLINE, 1, 0);
+  uvmunmap(p->kpagetable, p->kstack, 1, 1);
+  uvmfree(p->kpagetable, 0);
 }
